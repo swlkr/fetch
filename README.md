@@ -10,37 +10,30 @@ use fetch::{post, get};
 let headers = headers().push("content-type", "application/json");
 
 // Content-Length
-let body = post("http://localhost1234", &headers, b"{\"key\":\"val\"}", |res| {
-    assert_eq!(res.status, 200);
-    res.body()
-}).unwrap();
+let response = post("http://localhost1234", &headers, b"{\"key\":\"val\"}")?;
+assert_eq!(res.status, 200);
+let body = res.body().unwrap();
 
 // Transfer-Encoding: Chunked
-post("http://localhost:1234", &headers, b"", |mut res| {
-    for chunk in res.chunk() {
-        let data = chunk?;
-        print!("{}", String::from_utf8_lossy(&data));
-    }
-    Ok(())
-}).unwrap();
+let res = post("http://localhost:1234", &headers, b"")?;
+for chunk in res.chunk() {
+    let data = chunk?;
+    print!("{}", String::from_utf8_lossy(&data));
+}
 
-// Sserver sent events
+// Server sent events
 let headers = headers()
                 .push("content-type", "application/json");
                 .push("accept", "text/event-stream");
 
-post("http://localhost:1234", &headers, b"{\"prompt\":\"hi\"}", |mut res| {
-    for event in res.event() {
-        let ev = event?;
-        if let Some(ref name) = ev.event {
-            print!("[{}] ", name);
-        }
-        println!("{}", ev.data);
+let res = post("http://localhost:1234", &headers, b"{\"prompt\":\"hi\"}")?;
+for event in res.event() {
+    let ev = event?;
+    if let Some(ref name) = ev.event {
+        print!("[{}] ", name);
     }
-    Ok(())
-}).unwrap();
+    println!("{}", ev.data);
+}
 
-let body = get("http://localhost:1234", headers(), |res| {
-    res.body()
-}).unwrap();
+let res = get("http://localhost:1234", &headers())?;
 ```
