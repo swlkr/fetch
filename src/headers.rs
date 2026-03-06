@@ -1,6 +1,7 @@
 use crate::Header;
 use std::fmt::Display;
 
+#[derive(Debug)]
 pub struct Headers(pub Vec<Header>);
 
 impl Headers {

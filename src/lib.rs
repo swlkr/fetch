@@ -130,7 +130,7 @@ pub fn post(url: &str, headers: &Headers, body: &[u8]) -> Result<Response<TcpStr
     let mut request: Vec<u8> = vec![];
     request.extend(b"POST /");
     request.extend(path.as_bytes());
-    request.extend(b"HTTP/1.1\r\n");
+    request.extend(b" HTTP/1.1\r\n");
     request.extend(b"Host: ");
     request.extend(host.as_bytes());
     request.extend(b"\r\nContent-Length: ");
@@ -162,9 +162,9 @@ pub fn get(url: &str, headers: &Headers) -> Result<Response<TcpStream>> {
     let stream = TcpStream::connect(&addr)?;
 
     let mut request: Vec<u8> = vec![];
-    request.extend(b"GET / ");
+    request.extend(b"GET /");
     request.extend(path.as_bytes());
-    request.extend(b"HTTP/1.1\r\n");
+    request.extend(b" HTTP/1.1\r\n");
     request.extend(b"Host: ");
     request.extend(host.as_bytes());
     request.extend(b"\r\n");
