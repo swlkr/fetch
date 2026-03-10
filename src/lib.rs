@@ -3,6 +3,7 @@ mod error;
 mod event_iter;
 mod header;
 mod headers;
+mod request;
 mod response;
 mod response_head;
 mod sse_event;
@@ -11,14 +12,22 @@ mod url;
 pub use error::{Error, Result, error};
 pub use header::Header;
 pub use headers::{Headers, headers};
+pub use request::Request;
 pub use response::Response;
 pub use response_head::ResponseHead;
 pub use sse_event::SseEvent;
-use std::io::{self, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io;
 pub use url::Url;
 
-pub fn parse_response(data: &[u8]) -> Result<ResponseHead> {
+pub fn post(url: &str) -> Request<'_> {
+    Request::new("POST", url)
+}
+
+pub fn get(url: &str) -> Request<'_> {
+    Request::new("GET", url)
+}
+
+pub(crate) fn parse_response(data: &[u8]) -> Result<ResponseHead> {
     let header_end = find_header_end(data)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "no header terminator found"))?;
 
@@ -79,7 +88,7 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
     data.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-fn parse_url<'a>(url: &'a str) -> Url<'a> {
+pub(crate) fn parse_url(url: &str) -> Url<'_> {
     let rest = match url.strip_prefix("http://") {
         Some(rest) => rest,
         None => url,
@@ -98,99 +107,11 @@ fn parse_url<'a>(url: &'a str) -> Url<'a> {
     Url { host, port, path }
 }
 
-fn send(mut stream: TcpStream, request: &[u8], body: &[u8]) -> Result<Response<TcpStream>> {
-    stream.write_all(request)?;
-    stream.write_all(body)?;
-    stream.flush()?;
-
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 1];
-    while let Ok(size) = stream.read(&mut tmp) {
-        if size == 0 {
-            return Err(error("Unexpected eof"));
-        }
-        buf.push(tmp[0]);
-        if buf.len() >= 4 && &buf[buf.len() - 4..] == b"\r\n\r\n" {
-            break;
-        }
-    }
-
-    let head = parse_response(&buf)?;
-    let reader = BufReader::new(stream);
-    let response = Response::from_parts(head, reader);
-    Ok(response)
-}
-
-pub fn post(url: &str, headers: &Headers, body: &[u8]) -> Result<Response<TcpStream>> {
-    let Url {
-        host, path, port, ..
-    } = parse_url(url);
-    let addr = format!("{}:{}", host, port);
-    let stream = TcpStream::connect(&addr)?;
-    let mut request: Vec<u8> = vec![];
-    request.extend(b"POST /");
-    request.extend(path.as_bytes());
-    request.extend(b" HTTP/1.1\r\n");
-    request.extend(b"Host: ");
-    request.extend(host.as_bytes());
-    request.extend(b"\r\nContent-Length: ");
-    request.extend(body.len().to_string().as_bytes());
-    request.extend(b"\r\n");
-
-    for header in &headers.0 {
-        if header.name.eq_ignore_ascii_case("host")
-            || header.name.eq_ignore_ascii_case("content-length")
-        {
-            continue;
-        }
-        request.extend(header.name.as_bytes());
-        request.extend(b": ");
-        request.extend(header.value.as_bytes());
-        request.extend(b"\r\n");
-    }
-    if !headers.get("connection").is_none() {
-        request.extend(b"Connection: close\r\n");
-    }
-    request.extend(b"\r\n");
-
-    send(stream, &request, body)
-}
-
-pub fn get(url: &str, headers: &Headers) -> Result<Response<TcpStream>> {
-    let Url { host, port, path } = parse_url(url);
-    let addr = format!("{}:{}", host, port);
-    let stream = TcpStream::connect(&addr)?;
-
-    let mut request: Vec<u8> = vec![];
-    request.extend(b"GET /");
-    request.extend(path.as_bytes());
-    request.extend(b" HTTP/1.1\r\n");
-    request.extend(b"Host: ");
-    request.extend(host.as_bytes());
-    request.extend(b"\r\n");
-
-    for header in &headers.0 {
-        if header.name.to_lowercase() == "host" {
-            continue;
-        }
-        request.extend(header.name.as_bytes());
-        request.extend(b": ");
-        request.extend(header.value.as_bytes());
-        request.extend(b"\r\n");
-    }
-    if headers.get("connection").is_none() {
-        request.extend(b"Connection: close\r\n");
-    }
-    request.extend(b"\r\n");
-
-    send(stream, &request, &[])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{
-        io::{Cursor, Read, Write},
+        io::{BufReader, Cursor, Read, Write},
         net::TcpListener,
     };
 
@@ -221,7 +142,7 @@ mod tests {
         let addr = with_response(
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Custom: test\r\n\r\n",
         )?;
-        let response = get(&addr, &headers())?;
+        let response = get(&addr).response()?;
         assert_eq!(response.status, 200);
         assert_eq!(
             response.headers.get("content-type"),
@@ -234,7 +155,7 @@ mod tests {
     #[test]
     fn test_get_content_length() -> Result<()> {
         let addr = with_response(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")?;
-        let res = get(&addr, &headers())?;
+        let res = get(&addr).response()?;
         assert_eq!(res.status, 200);
         assert_eq!(res.headers.get("content-length"), Some("5"));
         assert_eq!(res.body().unwrap(), b"hello");
@@ -247,7 +168,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n\
                      event: message\ndata: hello\n\nevent: update\ndata: line1\ndata: line2\n\n",
         )?;
-        let mut res = get(&addr, &headers())?;
+        let mut res = get(&addr).response()?;
         assert_eq!(res.status, 200);
         assert_eq!(res.headers.get("content-type"), Some("text/event-stream"));
         let events: Vec<SseEvent> = res.events().collect::<Result<_>>().unwrap();

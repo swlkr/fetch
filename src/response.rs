@@ -1,6 +1,5 @@
-use crate::{
-    BufReader, Headers, Read, ResponseHead, Result, chunk_iter::ChunkIter, event_iter::EventIter,
-};
+use crate::{Headers, ResponseHead, Result, chunk_iter::ChunkIter, event_iter::EventIter};
+use std::io::{BufReader, Read};
 
 pub struct Response<R: Read> {
     pub status: u16,
