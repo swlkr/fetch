@@ -1,4 +1,4 @@
-use crate::{Headers, ResponseHead, Result, chunk_iter::ChunkIter, event_iter::EventIter};
+use crate::{Headers, OwnedEventIter, ResponseHead, Result, chunk_iter::ChunkIter, event_iter::EventIter};
 use std::io::{BufReader, Read};
 
 pub struct Response<R: Read> {
@@ -54,5 +54,9 @@ impl<R: Read> Response<R> {
             chunk_remaining: 0,
             chunk_done: false,
         }
+    }
+
+    pub fn into_events(self) -> OwnedEventIter<R> {
+        OwnedEventIter::new(self.reader, self.is_chunked)
     }
 }
