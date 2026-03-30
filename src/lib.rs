@@ -7,6 +7,8 @@ mod owned_event_iter;
 mod request;
 mod response;
 mod response_head;
+#[cfg(target_os = "linux")]
+mod ssl;
 mod sse_event;
 mod url;
 
@@ -14,7 +16,7 @@ pub use error::{Error, Result, error};
 pub use header::Header;
 pub use headers::{Headers, headers};
 pub use owned_event_iter::OwnedEventIter;
-pub use request::Request;
+pub use request::{Request, Stream};
 pub use response::Response;
 pub use response_head::ResponseHead;
 pub use sse_event::SseEvent;
@@ -91,9 +93,12 @@ fn find_header_end(data: &[u8]) -> Option<usize> {
 }
 
 pub(crate) fn parse_url(url: &str) -> Url<'_> {
-    let rest = match url.strip_prefix("http://") {
-        Some(rest) => rest,
-        None => url,
+    let (rest, tls) = if let Some(rest) = url.strip_prefix("https://") {
+        (rest, true)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (rest, false)
+    } else {
+        (url, false)
     };
 
     let (host, path) = match rest.split_once('/') {
@@ -101,12 +106,18 @@ pub(crate) fn parse_url(url: &str) -> Url<'_> {
         None => (rest, "/"),
     };
 
+    let default_port = if tls { "443" } else { "80" };
     let (host, port) = match host.split_once(':') {
         Some((host, port)) => (host, port),
-        None => (host, "80"),
+        None => (host, default_port),
     };
 
-    Url { host, port, path }
+    Url {
+        host,
+        port,
+        path,
+        tls,
+    }
 }
 
 #[cfg(test)]
@@ -324,11 +335,30 @@ mod tests {
         assert_eq!(url.host, "example.com");
         assert_eq!(url.port, "8080");
         assert_eq!(url.path, "api/v1");
+        assert!(!url.tls);
     }
 
     #[test]
     fn test_parse_url_default_port() {
         let url = parse_url("http://example.com/test");
         assert_eq!(url.port, "80");
+        assert!(!url.tls);
+    }
+
+    #[test]
+    fn test_parse_url_https() {
+        let url = parse_url("https://example.com/secure");
+        assert_eq!(url.host, "example.com");
+        assert_eq!(url.port, "443");
+        assert_eq!(url.path, "secure");
+        assert!(url.tls);
+    }
+
+    #[test]
+    fn test_parse_url_https_custom_port() {
+        let url = parse_url("https://example.com:8443/api");
+        assert_eq!(url.host, "example.com");
+        assert_eq!(url.port, "8443");
+        assert!(url.tls);
     }
 }

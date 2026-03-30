@@ -2,6 +2,40 @@ use crate::{Headers, Response, Result, headers, parse_response, parse_url};
 use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 
+pub enum Stream {
+    Tcp(TcpStream),
+    #[cfg(target_os = "linux")]
+    Ssl(crate::ssl::SslStream),
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Tcp(s) => s.read(buf),
+            #[cfg(target_os = "linux")]
+            Stream::Ssl(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Stream::Tcp(s) => s.write(buf),
+            #[cfg(target_os = "linux")]
+            Stream::Ssl(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Stream::Tcp(s) => s.flush(),
+            #[cfg(target_os = "linux")]
+            Stream::Ssl(s) => s.flush(),
+        }
+    }
+}
+
 pub struct Request<'a> {
     method: &'static str,
     url: &'a str,
@@ -40,10 +74,22 @@ impl<'a> Request<'a> {
         self
     }
 
-    pub fn response(self) -> Result<Response<TcpStream>> {
+    pub fn response(self) -> Result<Response<Stream>> {
         let url = parse_url(self.url);
-        let addr = format!("{}:{}", url.host, url.port);
-        let stream = TcpStream::connect(&addr)?;
+
+        let stream = if url.tls {
+            #[cfg(target_os = "linux")]
+            {
+                Stream::Ssl(crate::ssl::SslStream::connect(url.host, url.port)?)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                return Err(crate::error("HTTPS is only supported on Linux"));
+            }
+        } else {
+            let addr = format!("{}:{}", url.host, url.port);
+            Stream::Tcp(TcpStream::connect(&addr)?)
+        };
 
         let mut request: Vec<u8> = vec![];
         request.extend(self.method.as_bytes());
@@ -82,7 +128,7 @@ impl<'a> Request<'a> {
     }
 }
 
-fn send(mut stream: TcpStream, request: &[u8], body: &[u8]) -> Result<Response<TcpStream>> {
+fn send(mut stream: Stream, request: &[u8], body: &[u8]) -> Result<Response<Stream>> {
     stream.write_all(request)?;
     stream.write_all(body)?;
     stream.flush()?;
